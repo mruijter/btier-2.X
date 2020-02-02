@@ -1,0 +1,53 @@
+.\"
+.\" btier_setup.1 - the *roff document processor source for the btier_setup manual
+.\" You may contact the author by:
+.\" e-mail: mruijter@gmail.com
+.\"
+.TH btier_setup 1 .\" "BTIER reference" v2.0.0 "2015"
+.SH NAME
+btier_setup - The setup utility for BTIER
+.nf
+BTIER       - A blockdevice that provides automated tiered storage
+.SH SYNTAX
+.nf
+\fBAttach\fR : ./btier_setup -f datadev[:datadev:datadev]
+		-c(create) -h(help)
+\fBDetach :\fR ./btier_setup -d /dev/tier_device_name
+.fi
+.SH VERSION
+This man page documents btier_setup version 2.0.0
+.SH DESCRIPTION
+\fBbtier_setup\fR 
+.PP
+.SS OPTIONS
+.IP -c
+The -c option will "format" the btier devices and write the metadata to them. The current version of btier only supports block devices to be used
+.IP -f datafile
+Specify a list of blockdevices separated by a semicolon.
+.IP -z
+Specifies the sectorsize. Valid options are 512..4096 bytes.
+.nf
+.PP
+Email bug reports to:
+.BR mruijter@gmail.com
+or
+.BR tier-users@lists.sourceforge.net
+.SH COPYRIGHT
+Copyright (C) 2012 - 2015  Mark Ruijter
+              2014 - 2015  Jianjian Huo
+.PP
+You can redistribute BTIER and btier_setup and/or modify it
+under the terms of the GNU General Public License as published by
+the Free Software Foundation.
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see \fB<http://www.gnu.org/licenses/>\fR.
+.PP
+BTIER is distributed in the hope that it will be useful, but
+WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
+or FITNESS FOR A PARTICULAR PURPOSE.
+See the GNU General Public License for more details.
+
+.SH AUTHOR
+.PP
+Mark Ruijter <mruijter@gmail.com>
+.br
