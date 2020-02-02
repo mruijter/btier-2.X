@@ -15,8 +15,6 @@
 #define die_ioctlerr(f...) { fprintf(stderr,(f)); flock(fd, LOCK_UN); exit(-1); }
 #define die_syserr() { fprintf(stderr,"Fatal system error : %s",strerror(errno)); exit(-2); }
 
-int errno;
-
 struct backing_device {
 	int tier_dta_file;
 	u64 bitlistsize;
@@ -242,7 +240,7 @@ void restore_list(int fd, u64 size, u64 soffset, char *type, int device)
 	close(sfd);
 }
 
-int tier_set_fd(int fd, char *datafile, int devicenr)
+int tier_set_fd(char *datafile, int devicenr)
 {
 	int res;
 	int ffd;
@@ -376,7 +374,7 @@ int main(int argc, char *argv[])
 	struct stat stdta;
 	struct stat device;
 	int mode = O_RDWR | O_NOATIME;
-	int fd, ffd;
+	int ffd;
 	int dev;
 	int count;
 	u64 round;
@@ -427,7 +425,7 @@ int main(int argc, char *argv[])
 				mkoptions.backdev[count]->datafile);
 			exit(-1);
 		}
-		if (0 != (tier_set_fd(fd, mkoptions.backdev[count]->datafile,
+		if (0 != (tier_set_fd(mkoptions.backdev[count]->datafile,
 				      count)))
 			die_syserr();
 		mkoptions.bitlistsize_total +=

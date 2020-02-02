@@ -22,7 +22,7 @@
 
 #define TRUE 1
 #define FALSE 0
-#define TIER_VERSION "2.1.0"
+#define TIER_VERSION "2.2.0"
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Mark Ruijter");
@@ -50,32 +50,92 @@ static int tier_device_count(void)
 	return count;
 }
 
-char *tiger_hash(char *data, unsigned int dlen)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,4,0)
+void tier_free_hash(struct crypto_hash *tfm) {
+	crypto_free_hash(tfm);
+#else
+void tier_free_hash(struct crypto_shash *tfm) {
+	crypto_free_shash(tfm);
+#endif
+}
+
+char *sha256_hash(char *data, unsigned int dlen)
 {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,4,0)
+	struct crypto_shash *tfm;
+	struct shash_desc *desc;
+#else
 	struct scatterlist sg;
+	struct crypto_hash *tfm;
 	struct hash_desc desc;
+#endif
 	char *thash;
 
-	thash = kzalloc(32, GFP_KERNEL);
+	thash = kzalloc(SHA256_HASH_LEN, GFP_KERNEL);
 	if (!thash)
 		return thash;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,4,0)
 	/* ... set up the scatterlists ... */
-	desc.tfm = crypto_alloc_hash("tgr192", 0, CRYPTO_ALG_ASYNC);
-	if (IS_ERR(desc.tfm)) {
-                pr_warn("unable to allocate crypto_hash\n");
+	tfm = crypto_alloc_hash("sha256", 0, CRYPTO_ALG_ASYNC);
+	if (IS_ERR(tfm)) {
+		pr_warn("unable to allocate crypto_hash\n");
 		goto fail;
 	}
+	desc.tfm = tfm;
 	desc.flags = 0;
 	sg_init_one(&sg, data, dlen);
 	if (crypto_hash_digest(&desc, &sg, dlen, thash))
 		goto fail;
-	crypto_free_hash(desc.tfm);
+#else
+	tfm = crypto_alloc_shash("sha256", 0, 0);
+	if (IS_ERR(tfm))
+		goto fail;
+	desc = kmalloc(sizeof(struct shash_desc) + crypto_shash_descsize(tfm),
+		GFP_KERNEL);
+	if (!desc)
+		goto fail;
+	desc->tfm = tfm;
+	if (crypto_shash_digest(desc, (u8 *)data, dlen, thash))
+		goto fail;
+	kzfree(desc);
+#endif
+	tier_free_hash(tfm);
 	return thash;
-
 fail:
+	pr_err("sha256_hash failed!");
+	tier_free_hash(tfm);
 	kfree(thash);
 	return NULL;
 }
+
+#ifndef strlcpytolower
+/**
+ * strlcpytolower - Copy a length-limited string and convert to lowercase.
+ * @dst: The buffer to store the result.
+ * @src: The string to convert to lowercase.
+ * @len: Maximum string length. May be SIZE_MAX (-1) to set no limit.
+ */
+void strlcpytolower(char *dst, const char *src, size_t len)
+{
+	size_t i;
+
+	if (!len)
+		return;
+
+	for (i = 0; i < len && src[i]; ++i)
+		dst[i] = tolower(src[i]);
+	dst[i < len ? i : i - 1] = '\0';
+}
+
+/**
+ * strtolower - Convert string to lowercase.
+ * @s: The string to operate on.
+ */
+static inline void strtolower(char *s)
+{
+	strlcpytolower(s, s, -1);
+}
+#endif
 
 /*
  * Open and close.
@@ -323,29 +383,33 @@ end_exit:
 }
 
 static int tier_file_write(struct tier_device *dev, unsigned int device,
-			   void *buf, size_t len, loff_t pos)
+                           void *buf, size_t len, loff_t pos)
 {
 	ssize_t bw;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,0,0)
 	mm_segment_t old_fs = get_fs();
+#endif
 	struct backing_device *backdev = dev->backdev[device];
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,0,0)
 	set_fs(get_ds());
+#endif
 	set_debug_info(dev, VFSWRITE);
+#if LINUX_VERSION_CODE > KERNEL_VERSION(4,14,0)
+	bw = kernel_write(backdev->fds, buf, len, &pos);
+#else
 	bw = vfs_write(backdev->fds, buf, len, &pos);
+#endif
 	clear_debug_info(dev, VFSWRITE);
-
-	/*
-	 * there is no need to set dirty, since all meta operations are 
-	 * synchronized with actual device. 
-	 */
-	//backdev->dirty = 1;
-
+	backdev->dirty = 1;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,0,0)
 	set_fs(old_fs);
+#endif
 	if (likely(bw == len))
 		return 0;
-	pr_err("Write error on device %s at offset %llu, length %llu\n",
-	       backdev->fds->f_path.dentry->d_name.name,
-	       (unsigned long long)pos, (unsigned long long)len);
+	pr_err("Write error on device %s at offset %llu, length %li\n",
+		backdev->fds->f_path.dentry->d_name.name,
+		(unsigned long long)pos, (unsigned long)len);
 	if (bw >= 0)
 		bw = -EIO;
 	return bw;
@@ -355,23 +419,33 @@ static int tier_file_write(struct tier_device *dev, unsigned int device,
  * tier_file_read - helper for reading data
  */
 static int tier_file_read(struct tier_device *dev, unsigned int device,
-			  void *buf, const int len, loff_t pos)
+				void *buf, const int len, loff_t pos)
 {
 	struct backing_device *backdev = dev->backdev[device];
 	struct file *file;
 	ssize_t bw;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,0,0)
 	mm_segment_t old_fs = get_fs();
-
+#endif
 	file = backdev->fds;
 	set_debug_info(dev, VFSREAD);
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,0,0)
 	set_fs(get_ds());
+#endif
+#if LINUX_VERSION_CODE > KERNEL_VERSION(4,14,0)
+	bw = kernel_read(file, buf, len, &pos);
+#else
 	bw = vfs_read(file, buf, len, &pos);
+#endif
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,0,0)
 	set_fs(old_fs);
+#endif
 	clear_debug_info(dev, VFSREAD);
+	file->f_ra.ra_pages = backdev->ra_pages;
 	if (likely(bw == len))
 		return 0;
 	pr_err("Read error at byte offset %llu, length %i.\n",
-	       (unsigned long long)pos, len);
+		(unsigned long long)pos, len);
 	if (bw >= 0)
 		bw = -EIO;
 	return bw;
@@ -1224,10 +1298,17 @@ static char *reserve_devicename(unsigned int *devnr)
 	return retname;
 }
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,14,0)
+static void migrate_timer_expired(struct timer_list *tl)
+#else
 static void migrate_timer_expired(unsigned long q)
+#endif
 {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,14,0)
+	struct tier_device *dev = from_timer(dev, tl, migrate_timer);
+#else
 	struct tier_device *dev = (struct tier_device *)q;
-
+#endif
 	if (0 == atomic_read(&dev->migrate)) {
 		atomic_set(&dev->migrate, 1);
 		wake_up(&dev->migrate_event);
@@ -1377,12 +1458,15 @@ char *uuid_hash(char *data, int hashlen)
 	int n;
 	char *ahash = NULL;
 
-	ahash = kzalloc(TIGER_HASH_LEN * 2, GFP_KERNEL);
-	if (!ahash)
+	ahash = kzalloc(UUID_LEN * 2, GFP_KERNEL);
+	if (!ahash) {
+		pr_err("uuid_hash: kzalloc failed");
 		return NULL;
+	}
 	for (n = 0; n < hashlen; n++) {
 		sprintf(&ahash[n * 2], "%02X", data[n]);
 	}
+	strtolower(ahash);
 	return ahash;
 }
 
@@ -1390,7 +1474,7 @@ char *btier_uuid(struct tier_device *dev)
 {
 	int i, n;
 	char *thash;
-	int hashlen = TIGER_HASH_LEN;
+	int hashlen = UUID_LEN;
 	const char *name;
 	char *xbuf;
 	char *asc;
@@ -1400,13 +1484,13 @@ char *btier_uuid(struct tier_device *dev)
 		return NULL;
 	for (i = 0; i < dev->attached_devices; i++) {
 		name = dev->backdev[i]->fds->f_path.dentry->d_name.name;
-		thash = tiger_hash((char *)name, strlen(name));
+		thash = sha256_hash((char *)name, strlen(name));
 		if (!thash) {
-			/* When tiger is not supported, use a simple UUID construction */
-			thash = kzalloc(TIGER_HASH_LEN, GFP_KERNEL);
+			/* When sha256 is not supported, use a simple UUID construction */
+			thash = kzalloc(UUID_LEN, GFP_KERNEL);
 			memcpy(thash,
-			       dev->backdev[i]->fds->f_path.dentry->d_name.name,
-			       hashlen);
+				dev->backdev[i]->fds->f_path.dentry->d_name.name,
+				hashlen);
 		}
 		for (n = 0; n < hashlen; n++) {
 			xbuf[n] ^= thash[n];
@@ -1414,6 +1498,12 @@ char *btier_uuid(struct tier_device *dev)
 		kfree(thash);
 	}
 	asc = uuid_hash(xbuf, hashlen);
+	/* Conform to a short uuid format.*/
+	if (asc) {
+		asc[8] = 45;
+		asc[13] = 45;
+		asc[18] = 45;
+	}
 	kfree(xbuf);
 	return asc;
 }
@@ -1432,7 +1522,7 @@ static int order_devices(struct tier_device *dev)
 	struct block_device *bdev = NULL;
 	int res = -ENOMEM;
 
-	zhash = kzalloc(TIGER_HASH_LEN, GFP_KERNEL);
+	zhash = kzalloc(UUID_LEN, GFP_KERNEL);
 	if (!zhash) {
 		tiererror(dev, "order_devices : alloc failed");
 		return res;
@@ -1485,9 +1575,9 @@ static int order_devices(struct tier_device *dev)
 		uuid = btier_uuid(dev);
 		if (0 ==
 		    memcmp(dev->backdev[i]->devmagic->uuid, zhash,
-			   TIGER_HASH_LEN))
+			   UUID_LEN))
 			memcpy(dev->backdev[i]->devmagic->uuid, uuid,
-			       TIGER_HASH_LEN);
+			       UUID_LEN);
 		kfree(uuid);
 		dev->backdev[i]->devmagic->clean = DIRTY;
 		write_device_magic(dev, i);
@@ -1716,7 +1806,11 @@ static int tier_register(struct tier_device *dev)
 	q->limits.discard_alignment	= BLKSIZE;
 	set_bit(QUEUE_FLAG_NONROT,      &q->queue_flags);
 	set_bit(QUEUE_FLAG_DISCARD,     &q->queue_flags);
-	blk_queue_flush(q, REQ_FLUSH | REQ_FUA);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,7,0)
+	blk_queue_write_cache(dev->rqueue, true, true);
+#else
+	blk_queue_flush(dev->rqueue, REQ_FLUSH | REQ_FUA);
+#endif
 
 	/*
 	 * Get registered.
@@ -1762,9 +1856,14 @@ static int tier_register(struct tier_device *dev)
 	INIT_WORK((struct work_struct *)migratework, data_migrator);
 	queue_work(dev->migration_wq, (struct work_struct *)migratework);
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,14,0)
 	init_timer(&dev->migrate_timer);
 	dev->migrate_timer.data = (unsigned long)dev;
 	dev->migrate_timer.function = migrate_timer_expired;
+#else
+	timer_setup(&dev->migrate_timer, migrate_timer_expired, 0);
+#endif
+
 	dev->migrate_timer.expires =
 	    jiffies + msecs_to_jiffies(dtapolicy->migration_interval * 1000);
 	add_timer(&dev->migrate_timer);

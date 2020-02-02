@@ -36,6 +36,8 @@
 #include <linux/version.h>
 #include <linux/sysfs.h>
 #include <linux/device.h>
+#include <linux/ctype.h>
+#include <crypto/hash.h>
 #include <asm/div64.h>
 #include "btier_common.h"
 #else
@@ -80,7 +82,8 @@ typedef unsigned long u32;
 #define BTIER_MAX_DEVS 26
 #define BTIER_MAX_INFLIGHT 256
 
-#define TIGER_HASH_LEN 24
+#define SHA256_HASH_LEN 32
+#define UUID_LEN 24
 
 #define RANDOM 0x01
 #define SEQUENTIAL 0x02
@@ -179,7 +182,7 @@ struct devicemagic {
 	u64 startofblocklist;
 	char fullpathname[1025];
 	struct data_policy dtapolicy;
-	char uuid[24];
+	char uuid[UUID_LEN];
 } __attribute__ ((packed));
 
 struct fd_s {
@@ -187,6 +190,11 @@ struct fd_s {
 };
 
 #ifdef __KERNEL__
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 8, 0)
+	#define mod_timer_pinned mod_timer
+	#define HRTIMER_MODE_ABS_PINNED HRTIMER_MODE_ABS
+#endif
 
 struct bio_task {
 	//atomic_t pending;
@@ -379,7 +387,7 @@ void *as_sprintf(const char *, ...);
 u64 allocated_on_device(struct tier_device *, int);
 void btier_clear_statistics(struct tier_device *dev);
 int migrate_direct(struct tier_device *, u64, int);
-char *tiger_hash(char *, unsigned int);
+char *sha256_hash(char *, unsigned int);
 void btier_lock(struct tier_device *);
 void btier_unlock(struct tier_device *);
 #endif

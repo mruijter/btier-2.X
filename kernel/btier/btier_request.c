@@ -22,7 +22,11 @@ static void tier_submit_bio(struct tier_device *dev,
 	set_debug_info(dev, BIO);
 
 	bio->bi_iter.bi_sector	= start_sector;
-	bio->bi_bdev		= bdev;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,3,0)
+	bio_set_dev(bio, bdev);
+#else
+	bio->bi_bdev = bdev;
+#endif
 
 	generic_make_request(bio);
 	clear_debug_info(dev, BIO);
@@ -73,6 +77,7 @@ static int tier_moving_io(struct tier_device *dev,
 	unsigned int done = 0;
 	unsigned int cur_chunk = 0;
 	struct bio *split;
+
         sector_t start;
 	int res = 0;
 
@@ -80,8 +85,13 @@ static int tier_moving_io(struct tier_device *dev,
 		return -EPERM;
 
 	bio_reset(bio);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,3,0)
+	bio_set_dev(bio, bdev);
+        bio->bi_opf = WRITE;
+#else
 	bio->bi_bdev = bdev;
-	bio->bi_rw = rw;
+        bio->bi_rw = WRITE;
+#endif
 	bio->bi_vcnt = BLKSIZE >> PAGE_SHIFT;
 	bio->bi_iter.bi_sector = binfo->offset >> 9;
 	bio->bi_iter.bi_size = BLKSIZE;
@@ -97,17 +107,25 @@ static int tier_moving_io(struct tier_device *dev,
 		if (1 == atomic_read(&bio->__bi_remaining) && 
 		    cur_chunk == BLKSIZE) {
 			set_debug_info(dev, BIO);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,3,0)
+			res = submit_bio_wait(bio);
+#else
 			res = submit_bio_wait(rw, bio);
+#endif
 			clear_debug_info(dev, BIO);
 			return res;
 		}
 
 		start = 0;
 		split = bio_next_split(bio, cur_chunk >> 9, 
-				       GFP_NOIO, fs_bio_set);
+				       GFP_NOIO, &fs_bio_set);
 		if (split == bio) {
 			set_debug_info(dev, BIO);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,3,0)
+			res = submit_bio_wait(bio);
+#else
 			res = submit_bio_wait(rw, bio);
+#endif
 			clear_debug_info(dev, BIO);
 			return res;
 		} else {
@@ -149,7 +167,11 @@ int tier_moving_block(struct tier_device *dev,
 static inline void increase_iostats(struct bio_task *bt)
 {
 	struct tier_device *dev = bt->dev;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,3,0)
+        int rw = bio_data_dir(bt->parent_bio);
+#else
 	int rw = bio_rw(bt->parent_bio);
+#endif
 
 	if (rw) {
 		if (bt->iotype == RANDOM)
@@ -397,11 +419,24 @@ static void tier_meta_work(struct work_struct *work)
 		/* send this zero size bio to every backing device*/
 		set_debug_info(dev, PRESYNC);
 		for (i = 0; i < dev->attached_devices; i++) {
-			bio_init(bio);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,10,0)
+			bio_init(bio, NULL, 0);
 			__bio_clone_fast(bio, parent_bio);
+#else
+			bio_init(bio);
+			__bio_clone_fast(bio, parent_bio, parent_bio->bi_vcnt);
+#endif
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,3,0)
+			bio_set_dev(bio, dev->backdev[i]->bdev);
+#else
 			bio->bi_bdev = dev->backdev[i]->bdev;
+#endif
 			/* no need to set bi_end_io and bi_private */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,3,0)
+			ret |= submit_bio_wait(bio);
+#else
 			ret |= submit_bio_wait(bio->bi_rw, bio);
+#endif
 		}
 		clear_debug_info(dev, PRESYNC);
 	}
@@ -465,9 +500,12 @@ static inline void tier_dev_nodata(struct tier_device *dev,
 	memset(bm, 0, sizeof(*bm));
 
 	bm->dev = dev;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,3,0)
+	bm->flush = (parent_bio->bi_opf & (REQ_SYNC | REQ_FUA)) != 0;
+#else
 	bm->flush = (parent_bio->bi_rw & (REQ_FLUSH|REQ_FUA)) != 0;
+#endif
 	bm->parent_bio = parent_bio;
-	
 	tier_submit_and_wait_meta(bm);
 }
 
@@ -523,7 +561,11 @@ static void tiered_dev_access(struct tier_device *dev, struct bio_task *bt)
 	u64 end_blk, cur_blk = 0, offset;
 	struct blockinfo *binfo;
 	unsigned int offset_in_blk, size_in_blk;
-	int rw = bio_rw(bt->parent_bio);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,3,0)
+        int rw = bio_data_dir(bt->parent_bio);
+#else
+        int rw = bio_rw(bt->parent_bio);
+#endif
         unsigned int done = 0;
         unsigned int cur_chunk = 0;
         sector_t start = 0;
@@ -612,7 +654,7 @@ static void tiered_dev_access(struct tier_device *dev, struct bio_task *bt)
 			}
 
 			split = bio_next_split(bio, cur_chunk >> 9, 
-					       GFP_NOIO, fs_bio_set);
+					       GFP_NOIO, &fs_bio_set);
 			if (split == bio) {
 				BUG_ON(cur_blk != end_blk);
 				start = (binfo->offset + offset_in_blk + done)
@@ -658,7 +700,11 @@ static inline struct bio_task *task_alloc(struct tier_device *dev,
 	bt->iotype = RANDOM;
 
 	bio = &bt->bio;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,10,0)
+	bio_init(bio, NULL, 0);
+#else
 	bio_init(bio);
+#endif
 	__bio_clone_fast(bio, parent_bio);
 	bio->bi_end_io  = request_endio;
 	bio->bi_private = bt;
@@ -671,13 +717,14 @@ blk_qc_t tier_make_request(struct request_queue *q, struct bio *parent_bio)
 	int cpu;
 	struct tier_device *dev = q->queuedata;
 	struct bio_task *bt;
-	int rw = bio_rw(parent_bio);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,3,0)
+        int rw = bio_data_dir(parent_bio);
+#else
+        int rw = bio_rw(parent_bio);
+#endif
 
 	atomic_set(&dev->wqlock, NORMAL_IO);
 	down_read(&dev->qlock);
-
-	if (rw == READA)
-		rw = READ;
 
 	BUG_ON(!dev || (rw != READ && rw != WRITE));
 
@@ -686,9 +733,13 @@ blk_qc_t tier_make_request(struct request_queue *q, struct bio *parent_bio)
 		goto out;
 
 	cpu = part_stat_lock();
-	part_stat_inc(cpu, &dev->gd->part0, ios[rw]);
-	part_stat_add(cpu, &dev->gd->part0, sectors[rw], 
-		      bio_sectors(parent_bio));
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,3,0)
+        part_stat_inc(&dev->gd->part0, ios[rw]);
+        part_stat_add(&dev->gd->part0, sectors[rw], bio_sectors(parent_bio));
+#else
+        part_stat_inc(cpu, &dev->gd->part0, ios[rw]);
+        part_stat_add(cpu, &dev->gd->part0, sectors[rw], bio_sectors(parent_bio));
+#endif
 	part_stat_unlock();
 
 	/* increase aio_pending for each bio */
@@ -697,7 +748,11 @@ blk_qc_t tier_make_request(struct request_queue *q, struct bio *parent_bio)
 	if (unlikely(!parent_bio->bi_iter.bi_size)) {
 		tier_dev_nodata(dev, parent_bio);
 	} else {
-		if (rw && (parent_bio->bi_rw & REQ_DISCARD)) {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,3,0)
+                if (rw && (bio_op(parent_bio) == REQ_OP_DISCARD)) {
+#else
+                if (rw && (parent_bio->bi_rw & REQ_DISCARD)) {
+#endif
 			tier_dev_discard(dev, parent_bio);
 			goto end_return;
 		}

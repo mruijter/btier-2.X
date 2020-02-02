@@ -192,15 +192,25 @@ static ssize_t tier_attr_discard_store(struct tier_device *dev,
 		if (dev->discard) {
 			dev->discard = 0;
 			pr_info("discard is disabled\n");
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,7,0)
 			queue_flag_clear_unlocked(QUEUE_FLAG_DISCARD,
-						  dev->rqueue);
+							dev->rqueue);
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(4,7,0)
+			blk_queue_flag_clear(QUEUE_FLAG_DISCARD,
+						dev->rqueue);
+#endif
 		}
 	} else {
 		if (!dev->discard) {
 			dev->discard = 1;
 			pr_info("discard is enabled\n");
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,7,0)
 			queue_flag_set_unlocked(QUEUE_FLAG_DISCARD,
 						dev->rqueue);
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(4,7,0)
+			blk_queue_flag_set(QUEUE_FLAG_DISCARD,
+						dev->rqueue);
+#endif
 		}
 	}
 	return s;
@@ -520,9 +530,9 @@ static ssize_t tier_attr_uuid_show(struct tier_device *dev, char *buf)
 {
 	int res = 0;
 
-	memcpy(buf, dev->backdev[0]->devmagic->uuid, TIGER_HASH_LEN);
-	buf[TIGER_HASH_LEN] = '\n';
-	res = TIGER_HASH_LEN + 1;
+	memcpy(buf, dev->backdev[0]->devmagic->uuid, UUID_LEN);
+	buf[UUID_LEN] = '\n';
+	res = UUID_LEN + 1;
 	return res;
 }
 

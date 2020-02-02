@@ -6,6 +6,8 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/ioctl.h>
+#include <sys/file.h>
 #include <fcntl.h>
 #include <string.h>
 #include <stdarg.h>
@@ -14,8 +16,6 @@
 
 #define die_ioctlerr(f...) { fprintf(stderr,(f)); flock(fd, LOCK_UN); exit(-1); }
 #define die_syserr() { fprintf(stderr,"Fatal system error : %s",strerror(errno)); exit(-2); }
-
-int errno;
 
 struct backing_device {
 	int tier_dta_file;
@@ -454,7 +454,7 @@ int main(int argc, char *argv[])
 
 	if ((fd = open("/dev/tiercontrol", mode)) < 0) {
 		fprintf(stderr,
-			"Failed to open /dev/tiercontrol, is tier.ko loaded?\n");
+			"Failed to open /dev/tiercontrol, is btier.ko loaded?\n");
 		exit(-1);
 	}
 
