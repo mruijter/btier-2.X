@@ -546,13 +546,17 @@ static ssize_t tier_attr_show_blockinfo_show(struct tier_device *dev, char *buf)
 	u64 blocknr = dev->user_selected_blockinfo;
 
 	for (i = 0; i < MAXPAGESHOW; i++) {
+		mutex_lock(dev->block_lock + blocknr);
 		binfo = get_blockinfo(dev, blocknr, 0);
-		if (!binfo)
+		if (!binfo) {
+			mutex_unlock(dev->block_lock + blocknr);
 			return res;
+		}
 		len = sprintf(buf + res, "%i,%llu,%lu,%u,%u\n",
 			      binfo->device - 1, binfo->offset,
 			      binfo->lastused, binfo->readcount,
 			      binfo->writecount);
+		mutex_unlock(dev->block_lock + blocknr);
 		res += len;
 		if (!dev->user_selected_ispaged)
 			break;

@@ -87,10 +87,10 @@ static int tier_moving_io(struct tier_device *dev,
 	bio_reset(bio);
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4,3,0)
 	bio_set_dev(bio, bdev);
-        bio->bi_opf = WRITE;
+        bio->bi_opf = rw;
 #else
 	bio->bi_bdev = bdev;
-        bio->bi_rw = WRITE;
+        bio->bi_rw = rw;
 #endif
 	bio->bi_vcnt = BLKSIZE >> PAGE_SHIFT;
 	bio->bi_iter.bi_sector = binfo->offset >> 9;

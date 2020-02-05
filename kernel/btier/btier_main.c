@@ -227,8 +227,10 @@ void btier_clear_statistics(struct tier_device *dev)
 	btier_lock(dev);
 
 	for (curblock = 0; curblock < blocks; curblock++) {
+		mutex_lock(dev->block_lock + curblock);
 		binfo = get_blockinfo(dev, curblock, 0);
 		if (dev->inerror) {
+			mutex_unlock(dev->block_lock + curblock);
 			break;
 		}
 		if (binfo->device != 0) {
@@ -236,6 +238,7 @@ void btier_clear_statistics(struct tier_device *dev)
 			binfo->writecount = 0;
 			(void)write_blocklist(dev, curblock, binfo, WC);
 		}
+		mutex_unlock(dev->block_lock + curblock);
 	}
 	for (i = 0; i < dev->attached_devices; i++) {
 		dmagic = dev->backdev[i]->devmagic;
@@ -1086,8 +1089,10 @@ static void walk_blocklist(struct tier_device *dev)
 			pr_info("walk_block_list ends on stop or disabled\n");
 			break;
 		}
+		mutex_lock(dev->block_lock + curblock);
 		binfo = get_blockinfo(dev, curblock, 0);
 		if (dev->inerror) {
+			mutex_unlock(dev->block_lock + curblock);
 			pr_err("walk_block_list stops, device is inerror\n");
 			break;
 		}
@@ -1119,6 +1124,7 @@ static void walk_blocklist(struct tier_device *dev)
 				update_blocklist(dev, curblock, binfo);
 			}
 		}
+		mutex_unlock(dev->block_lock + curblock);
 		if (NORMAL_IO == atomic_read(&dev->wqlock)) {
 			mincount++;
 			if (mincount > 5 || res) {
@@ -1155,6 +1161,7 @@ void do_migrate_direct(struct tier_device *dev)
 	struct blockinfo *binfo, *orgbinfo;
 
 	btier_lock(dev);
+	mutex_lock(dev->block_lock + blocknr);
 	if (!dtapolicy->migration_disabled) {
 		dtapolicy->migration_disabled = 1;
 		del_timer_sync(&dev->migrate_timer);
@@ -1195,6 +1202,7 @@ void do_migrate_direct(struct tier_device *dev)
 	}
 	kfree(orgbinfo);
 end_error:
+	mutex_unlock(dev->block_lock + blocknr);
 	btier_unlock(dev);
 }
 
@@ -1423,15 +1431,19 @@ static void repair_bitlists(struct tier_device *dev)
 	}
 
 	for (blocknr = 0; blocknr < dev->size >> BLK_SHIFT; blocknr++) {
+		mutex_lock(dev->block_lock + blocknr);
 		binfo = get_blockinfo(dev, blocknr, 0);
-		if (dev->inerror)
+		if (dev->inerror) {
+		        mutex_unlock(dev->block_lock + blocknr);
 			return;
+		}
 		if (0 != binfo->device) {
 			if (binfo->device > dev->attached_devices) {
 				pr_err
 				    ("repair_bitlists : cleared corrupted blocklist entry for blocknr %llu\n",
 				     blocknr);
 				memset(binfo, 0, sizeof(struct blockinfo));
+				mutex_unlock(dev->block_lock + blocknr);
 				continue;
 			}
 			if (BLKSIZE + binfo->offset >
@@ -1440,6 +1452,7 @@ static void repair_bitlists(struct tier_device *dev)
 				    ("repair_bitlists : cleared corrupted blocklist entry for blocknr %llu\n",
 				     blocknr);
 				memset(binfo, 0, sizeof(struct blockinfo));
+				mutex_unlock(dev->block_lock + blocknr);
 				continue;
 			}
 			relative_offset =
@@ -1450,6 +1463,7 @@ static void repair_bitlists(struct tier_device *dev)
 			dev->backdev[i]->free_offset =
 			    relative_offset >> BLK_SHIFT;
 		}
+		mutex_lock(dev->block_lock + blocknr);
 	}
 }
 
@@ -2182,6 +2196,7 @@ static int migrate_data_if_needed(struct tier_device *dev, u64 startofblocklist,
 	}
 	for (curblock = 0; curblock < blocks; curblock++) {
 		/* Do not update the blocks metadata */
+		mutex_lock(dev->block_lock + curblock);
 		orgbinfo = get_blockinfo(dev, curblock, 0);
 		if (dev->inerror) {
 			res = -EIO;
@@ -2189,6 +2204,7 @@ static int migrate_data_if_needed(struct tier_device *dev, u64 startofblocklist,
 		}
 		// Migrating blocks from device 0 + 1;
 		if (orgbinfo->device != 1) {
+			mutex_unlock(dev->block_lock + curblock);
 			continue;
 		}
 		cbres = 1;
@@ -2214,9 +2230,11 @@ static int migrate_data_if_needed(struct tier_device *dev, u64 startofblocklist,
 				     binfo->device - 1);
 		}
 		if (!cbres) {
+			mutex_unlock(dev->block_lock + curblock);
 			res = -1;
 			break;
 		}
+		mutex_unlock(dev->block_lock + curblock);
 	}
 	kfree(binfo);
 	pr_info("migrate_data_if_needed return %u\n", res);
