@@ -1,3 +1,6 @@
+        release                 : 2.2.1 2019-02-06
+				: Verify the different ifdefs for different kernel versions.
+                                : Tested the code with recent 5.3.5 and SuSE SLES12SP2 4.4.120.
         release                 : 2.2.0 2019-02-02
 				: Port btier 2.x to kernel 5.x. Tested with 5.3.5.
         release                 : 2.0.1 2015-03-03
