@@ -1,7 +1,7 @@
 /*
  * Btier : Tiered storage made easy.
- * Btier allows to create a virtual blockdevice that consists of multiple 
- * physical devices. A common configuration would be to use SSD/SAS/SATA. 
+ * Btier allows to create a virtual blockdevice that consists of multiple
+ * physical devices. A common configuration would be to use SSD/SAS/SATA.
  *
  * Partly based up-on sbd and the loop driver.
  *
@@ -10,11 +10,11 @@
  *
  *
  * Btier2: bio make_request path rewrite to handle parallel bio requests, new
- * per-block fine grained locking mechanism; tier data moving rewrite to work 
+ * per-block fine grained locking mechanism; tier data moving rewrite to work
  * with other make_request devices better, such as mdraid10; VFS mode removed,
- * aio_thread and tier_thread removed; passing sync to all underlying devices, 
+ * aio_thread and tier_thread removed; passing sync to all underlying devices,
  * and etc. Copyright (C) 2014 Jianjian Huo, <samuel.huo@gmail.com>
- * 
+ *
  */
 
 #include "btier.h"
@@ -22,7 +22,7 @@
 
 #define TRUE 1
 #define FALSE 0
-#define TIER_VERSION "2.2.0"
+#define TIER_VERSION "2.2.1"
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Mark Ruijter");
@@ -50,7 +50,7 @@ static int tier_device_count(void)
 	return count;
 }
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4,4,0)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,6,0)
 void tier_free_hash(struct crypto_hash *tfm) {
 	crypto_free_hash(tfm);
 #else
@@ -61,7 +61,7 @@ void tier_free_hash(struct crypto_shash *tfm) {
 
 char *sha256_hash(char *data, unsigned int dlen)
 {
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,4,0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,6,0)
 	struct crypto_shash *tfm;
 	struct shash_desc *desc;
 #else
@@ -74,7 +74,7 @@ char *sha256_hash(char *data, unsigned int dlen)
 	thash = kzalloc(SHA256_HASH_LEN, GFP_KERNEL);
 	if (!thash)
 		return thash;
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4,4,0)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,6,0)
 	/* ... set up the scatterlists ... */
 	tfm = crypto_alloc_hash("sha256", 0, CRYPTO_ALG_ASYNC);
 	if (IS_ERR(tfm)) {
@@ -370,7 +370,7 @@ int allocate_dev(struct tier_device *dev, u64 blocknr,
 					binfo->device = device + 1;
 					ret = mark_offset_as_used(dev, device,
 								relative_offset);
-					
+
 					return ret;
 				}
 			}
@@ -389,25 +389,16 @@ static int tier_file_write(struct tier_device *dev, unsigned int device,
                            void *buf, size_t len, loff_t pos)
 {
 	ssize_t bw;
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4,0,0)
-	mm_segment_t old_fs = get_fs();
-#endif
 	struct backing_device *backdev = dev->backdev[device];
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4,0,0)
-	set_fs(get_ds());
-#endif
 	set_debug_info(dev, VFSWRITE);
 #if LINUX_VERSION_CODE > KERNEL_VERSION(4,14,0)
 	bw = kernel_write(backdev->fds, buf, len, &pos);
 #else
-	bw = vfs_write(backdev->fds, buf, len, &pos);
+	bw = kernel_write(backdev->fds, buf, len, pos);
 #endif
 	clear_debug_info(dev, VFSWRITE);
 	backdev->dirty = 1;
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4,0,0)
-	set_fs(old_fs);
-#endif
 	if (likely(bw == len))
 		return 0;
 	pr_err("Write error on device %s at offset %llu, length %li\n",
@@ -427,21 +418,12 @@ static int tier_file_read(struct tier_device *dev, unsigned int device,
 	struct backing_device *backdev = dev->backdev[device];
 	struct file *file;
 	ssize_t bw;
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4,0,0)
-	mm_segment_t old_fs = get_fs();
-#endif
 	file = backdev->fds;
 	set_debug_info(dev, VFSREAD);
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4,0,0)
-	set_fs(get_ds());
-#endif
 #if LINUX_VERSION_CODE > KERNEL_VERSION(4,14,0)
 	bw = kernel_read(file, buf, len, &pos);
 #else
-	bw = vfs_read(file, buf, len, &pos);
-#endif
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4,0,0)
-	set_fs(old_fs);
+	bw = kernel_read(file, pos, buf, len);
 #endif
 	clear_debug_info(dev, VFSREAD);
 	file->f_ra.ra_pages = backdev->ra_pages;
@@ -716,7 +698,7 @@ void discard_on_real_device(struct tier_device *dev,
 	if (!dev->discard_to_devices || !dev->discard)
 		return;
 
-	/* 
+	/*
 	 * Check if this device supports discard
 	 * return when it does not
 	*/
@@ -785,7 +767,7 @@ void reset_counters_on_migration(struct tier_device *dev,
  * collect enough hits. After which it is compared
  * to the average hits that blocks have had on this
  * device. Should the block score less then average
- * hits - hysteresis then it will be migrated to an 
+ * hits - hysteresis then it will be migrated to an
  * even lower tier.
 
  * Although reads and writes are counted seperately
@@ -806,7 +788,7 @@ static int copyblock(struct tier_device *dev, struct blockinfo *newdevice,
 
 	/*
 	 * reset readcount and writecount up-on migration
-	 * to another tier 
+	 * to another tier
 	 */
 	newdevice->readcount = 0;
 	newdevice->writecount = 0;
@@ -880,8 +862,8 @@ static int migrate_up_ifneeded(struct tier_device *dev, struct blockinfo *binfo,
 			    dmagic->average_reads + dmagic->average_writes;
 /* Hard coded hysteresis, maybe change this later
  * so that it can be adjusted via sysfs
- * Migrate up when the chunk is used more frequently then 
- * the chunks of the higher tier - hysteresis 
+ * Migrate up when the chunk is used more frequently then
+ * the chunks of the higher tier - hysteresis
  */
 			hysteresis =
 			    btier_div(avghitcountnexttier, dev->attached_devices);
@@ -1765,9 +1747,9 @@ static int tier_register(struct tier_device *dev)
 	spin_lock_init(&dev->dbg_lock);
 	spin_lock_init(&dev->io_seq_lock);
 
-	if (!(dev->bio_task = mempool_create_slab_pool(32, 
+	if (!(dev->bio_task = mempool_create_slab_pool(32,
 						bio_task_cache)) ||
-	    !(dev->bio_meta = mempool_create_kmalloc_pool(32, 
+	    !(dev->bio_meta = mempool_create_kmalloc_pool(32,
 						sizeof(struct bio_meta))) ||
 	    alloc_blocklock(dev) ||
 	    alloc_moving_bio(dev) ||
@@ -1812,9 +1794,9 @@ static int tier_register(struct tier_device *dev)
 	blk_queue_logical_block_size(q, dev->logical_block_size);
 	blk_queue_io_opt(q, BLKSIZE);
 	blk_queue_max_discard_sectors(q, dev->size/512);
-	q->limits.max_segments		= BIO_MAX_PAGES;	
-	q->limits.max_hw_sectors	= q->limits.max_segment_size * 
-					  q->limits.max_segments;	
+	q->limits.max_segments		= BIO_MAX_PAGES;
+	q->limits.max_hw_sectors	= q->limits.max_segment_size *
+					  q->limits.max_segments;
 	q->limits.max_sectors		= q->limits.max_hw_sectors;
 	q->limits.discard_granularity	= BLKSIZE;
 	q->limits.discard_alignment	= BLKSIZE;
@@ -1859,7 +1841,7 @@ static int tier_register(struct tier_device *dev)
 	migratework->device = dev;
 	dev->managername = as_sprintf("%s-manager", dev->devname);
 	dev->aioname = as_sprintf("%s-aio", dev->devname);
-	dev->migration_wq = alloc_workqueue(dev->managername, 
+	dev->migration_wq = alloc_workqueue(dev->managername,
 					       WQ_MEM_RECLAIM | WQ_UNBOUND, 1);
 	if (!dev->migration_wq) {
 		pr_err("Unable to create migration workqueue for %s\n",
@@ -1903,7 +1885,7 @@ static loff_t tier_get_size(struct file *file)
 {
 	loff_t size;
 
-	// Compute loopsize in bytes 
+	// Compute loopsize in bytes
 	size = i_size_read(file->f_mapping->host);
 	// *
 	// * Unfortunately, if we want to do I/O on the device,
@@ -2170,7 +2152,7 @@ static int migrate_bitlist(struct tier_device *dev, int devicenr,
 	return res;
 }
 
-/* When the blocklist needs to be expanded 
+/* When the blocklist needs to be expanded
    we have to move blocks of data out of the way
    then expand the bitlist and migrate it from it's
    current location to the new location.
@@ -2261,11 +2243,11 @@ static int do_resize_tier(struct tier_device *dev, int devicenr,
 		return res;
 	/* When device 0 has grown we move the bitlist of the device to
 	   the end of the device and then move the blocklist to the end
-	   This does not require data migration 
+	   This does not require data migration
 
 	   When another device has grown we may need to expand the blocklist
 	   on device 0 as well. In that case we may need to migrate data
-	   from device0 to another device to make room for the larger 
+	   from device0 to another device to make room for the larger
 	   blocklist */
 	if (devicenr == 0) {
 		startofnewblocklist = startofnewbitlist - newblocklistsize;
