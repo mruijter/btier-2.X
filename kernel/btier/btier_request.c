@@ -741,7 +741,7 @@ blk_qc_t tier_make_request(struct request_queue *q, struct bio *parent_bio)
 		goto out;
 
 	cpu = part_stat_lock();
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,5,0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5,0,0)
         part_stat_inc(&dev->gd->part0, ios[rw]);
         part_stat_add(&dev->gd->part0, sectors[rw], bio_sectors(parent_bio));
 #else

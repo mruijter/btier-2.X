@@ -13,3 +13,9 @@ by converting the files to block devices using the kernel loop driver.
 
 IMPORTANT: BTIER-2.X works / is supported with a very recent kernel!!!
 Use at least 3.14 or higher.
+
+----
+
+UBUNTU has changed the lookup_bdev() call.
+To compile btier on UBUNTU type:
+vi +4 kernel/btier/btier.h and uncomment: #define UBUNTU.

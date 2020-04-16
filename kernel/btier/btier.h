@@ -1,6 +1,12 @@
 #ifndef _BTIER_H_
 #define _BTIER_H_
 
+/* Ubuntu made a custom kernel change to lookup_bdev()
+ * Uncomment the define below to compile on Ubuntu.
+ *
+#define UBUNTU
+*/
+
 #ifdef __KERNEL__
 #define pr_fmt(fmt) "btier: " fmt
 #include <linux/bio.h>
