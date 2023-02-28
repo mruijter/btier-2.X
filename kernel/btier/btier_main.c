@@ -1623,7 +1623,11 @@ static void register_new_device_size(struct tier_device *dev)
         dev->nsectors = sector_divide(dev->size, dev->logical_block_size);
         dev->size = dev->nsectors * dev->logical_block_size;
         set_capacity(dev->gd, dev->nsectors * (dev->logical_block_size >> 9));
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5,13,0)
+#ifndef RHEL86
         revalidate_disk(dev->gd);
+#endif
+#endif
         /* let user-space know about the new size */
         kobject_uevent(&disk_to_dev(dev->gd)->kobj, KOBJ_CHANGE);
 }

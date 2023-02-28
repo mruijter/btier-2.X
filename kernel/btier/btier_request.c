@@ -429,7 +429,11 @@ static void tier_meta_work(struct work_struct *work)
 #else
 			bio_init(bio);
 #endif
-			__bio_clone_fast(bio, parent_bio);
+#ifdef RHEL86
+        __bio_clone_fast(bio, parent_bio, GFP_NOIO);
+#else
+        __bio_clone_fast(bio, parent_bio);
+#endif
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4,14,0)
 			bio_set_dev(bio, dev->backdev[i]->bdev);
 #else
@@ -713,7 +717,11 @@ static inline struct bio_task *task_alloc(struct tier_device *dev,
 #else
 	bio_init(bio);
 #endif
+#ifdef RHEL86
+	__bio_clone_fast(bio, parent_bio, GFP_NOIO);
+#else
 	__bio_clone_fast(bio, parent_bio);
+#endif
 	bio->bi_end_io  = request_endio;
 	bio->bi_private = bt;
 
@@ -722,13 +730,15 @@ static inline struct bio_task *task_alloc(struct tier_device *dev,
 
 blk_qc_t tier_make_request(struct request_queue *q, struct bio *parent_bio)
 {
-	int cpu;
 	struct tier_device *dev = q->queuedata;
 	struct bio_task *bt;
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4,3,0)
         int rw = bio_data_dir(parent_bio);
 #else
         int rw = bio_rw(parent_bio);
+#endif
+#ifndef RHEL86
+	int cpu;
 #endif
 
 	atomic_set(&dev->wqlock, NORMAL_IO);
@@ -739,8 +749,12 @@ blk_qc_t tier_make_request(struct request_queue *q, struct bio *parent_bio)
 	/* if deregister already happens, or very bad error happens */
 	if (unlikely(!dev->active || dev->inerror))
 		goto out;
-
-	cpu = part_stat_lock();
+#ifdef RHEL86
+        part_stat_inc(&dev->gd->part0, ios[rw]);
+        part_stat_add(&dev->gd->part0, sectors[rw], bio_sectors(parent_bio));
+#else
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5,17,0)
+        cpu = part_stat_lock();
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5,0,0)
         part_stat_inc(&dev->gd->part0, ios[rw]);
         part_stat_add(&dev->gd->part0, sectors[rw], bio_sectors(parent_bio));
@@ -748,7 +762,9 @@ blk_qc_t tier_make_request(struct request_queue *q, struct bio *parent_bio)
         part_stat_inc(cpu, &dev->gd->part0, ios[rw]);
         part_stat_add(cpu, &dev->gd->part0, sectors[rw], bio_sectors(parent_bio));
 #endif
-	part_stat_unlock();
+        part_stat_unlock();
+#endif
+#endif
 
 	/* increase aio_pending for each bio */
 	atomic_inc(&dev->aio_pending);

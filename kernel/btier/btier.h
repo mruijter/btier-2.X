@@ -5,6 +5,8 @@
  * Uncomment the define below to compile on Ubuntu.
  *
 #define UBUNTU
+ * Uncomment when compiling on RHEL8.6 - 4.18.0
+#define RHEL86
 */
 
 #ifdef __KERNEL__
